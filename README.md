@@ -1,2 +1,2 @@
 # CSDS570
-Deep Generative Models Final Project. 
+Deep Generative Models Final Project
