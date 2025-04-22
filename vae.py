@@ -6,7 +6,6 @@ from torch.utils.data import DataLoader, Subset
 from torch.optim.adam import Adam
 import os
 import matplotlib.pyplot as plt
-import numpy as _
 import torchvision
 
 ROOT_DIR = os.path.dirname(__file__)
@@ -14,8 +13,11 @@ DATASET_DIR = os.path.join(ROOT_DIR, 'data')
 os.makedirs(DATASET_DIR, exist_ok=True)
 GENERATED_DIR = os.path.join(ROOT_DIR, 'generated')
 os.makedirs(GENERATED_DIR, exist_ok=True)
+OUTPUT_DIR = os.path.join(ROOT_DIR, 'vae_output')
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+MODEL_DIR = os.path.join(ROOT_DIR, 'model_weights')
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-# TODO do some operations in the latent space to make it more understandable
 class Encoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
@@ -105,7 +107,7 @@ class VAE(nn.Module):
                     self.saved_dists[label] = {'mean': mean, 'std': std}
 
     def k_closest(self, unknown_sample: torch.Tensor, k: int):
-        assert self.saved_dists is not None
+        assert(self.saved_dists is not None)
 
         self.eval()
         with torch.no_grad():
@@ -117,12 +119,14 @@ class VAE(nn.Module):
             for label, dist in self.saved_dists.items():
                 mean = dist['mean']
                 distance = torch.norm(mu - mean, p=2).item()
+                # distance = 1 - norm.pdf(mu, loc=mean, scale=dist['std'])
+                # distance = torch.mean(torch.tensor(distance, dtype=torch.float))
                 distances.append((label, distance))
 
             distances.sort(key=lambda x: x[1])
         return distances[:k]
 
-    def latent_distribution(self, k_closest_classes, sample, weight_of_sample):
+    def latent_distribution(self, k_closest_classes, sample, weight_of_sample, *, std=None):
         assert self.saved_dists is not None
 
         self.eval()
@@ -145,12 +149,15 @@ class VAE(nn.Module):
         sample_std = torch.mean(stds, dim=0)
         combined_stds = torch.cat([stds, sample_std.unsqueeze(0)], dim=0)
 
-        combined_weights = torch.cat([class_weights, torch.tensor([weight_of_sample])])
+        combined_weights = torch.cat([class_weights * (1 - weight_of_sample),
+                                      torch.tensor([weight_of_sample])])
         combined_weights /= combined_weights.sum()
 
         weighted_mean = torch.sum(combined_weights[:, None] * combined_means, dim=0)
         weighted_std = torch.sum(combined_weights[:, None] * combined_stds, dim=0)
 
+        if std is not None:
+            weighted_std = std
         return weighted_mean, weighted_std
 
     def generate_samples(self, mean, std, num_samples):
@@ -169,24 +176,28 @@ def vae_loss(recon_x, x, mu, logvar):
     kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return bce + kld
 
-def save_image_grid(original, reconstructed, epoch, output_dir='vae_outputs'):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+def save_image_grid(original, reconstructed, name):
+    num_images = len(original)
+    cols = num_images
+    rows = 2
 
-    _, axes = plt.subplots(2, 5, figsize=(15, 6))
-    for i in range(5):
-        axes[0, i].imshow(original[i].squeeze().cpu().numpy(), cmap='gray')
-        axes[0, i].axis('off')
-        if i == 0:
-            axes[0, i].set_title('Original')
+    _, axes = plt.subplots(rows, cols, figsize=(3 * cols, 6))
+    if num_images == 1:
+        axes = [[axes[0]], [axes[1]]]
 
-        axes[1, i].imshow(reconstructed[i].squeeze().cpu().numpy(), cmap='gray')
-        axes[1, i].axis('off')
+    for i in range(num_images):
+        axes[0][i].imshow(original[i].squeeze().cpu().numpy(), cmap='gray')
+        axes[0][i].axis('off')
         if i == 0:
-            axes[1, i].set_title('Reconstructed')
+            axes[0][i].set_title('Original')
+
+        axes[1][i].imshow(reconstructed[i].squeeze().cpu().numpy(), cmap='gray')
+        axes[1][i].axis('off')
+        if i == 0:
+            axes[1][i].set_title('Reconstructed')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, f'epoch_{epoch+1}.png'))
+    plt.savefig(os.path.join(OUTPUT_DIR, f'{name}.png'))
     plt.close()
 
 def main():
@@ -194,16 +205,20 @@ def main():
         transforms.ToTensor()
     ])
     num_epochs = 10
-    unknown = 7
+    unknown = 1
 
     full_train = datasets.MNIST(root=DATASET_DIR, train=True, transform=transform, download=True)
     indices = [i for i in range(len(full_train)) if full_train[i][1] != unknown]
     train_data = Subset(full_train, indices)
     train_loader = DataLoader(train_data, batch_size=128, shuffle=True)
+    full_test = datasets.MNIST(root=DATASET_DIR, train=False, transform=transform, download=True)
+    indices = [i for i in range(len(full_test)) if full_test[i][1] != unknown]
+    test_data = Subset(full_test, indices)
+    test_loader = DataLoader(test_data, batch_size=20, shuffle=True)
 
     vae = VAE(latent_dim=20)
     optimizer = Adam(vae.parameters(), lr=1e-3)
-    checkpoint_path = os.path.join(ROOT_DIR, 'vae_weights.pth')
+    checkpoint_path = os.path.join(MODEL_DIR, f'vae_weights_{unknown}.pth')
 
     if os.path.exists(checkpoint_path):
         vae.load_state_dict(torch.load(checkpoint_path, weights_only=True))
@@ -219,13 +234,18 @@ def main():
                 loss.backward()
                 train_loss += loss.item()
                 optimizer.step()
-
-            with torch.no_grad():
-                sample_batch = next(iter(train_loader))[0][:5]
-                recon_batch, _, _ = vae(sample_batch)
-                save_image_grid(sample_batch, recon_batch, epoch)
+                with torch.no_grad():
+                    sample_batch = next(iter(train_loader))[0][:5]
+                    recon_batch, _, _ = vae(sample_batch)
+                    save_image_grid(sample_batch, recon_batch, f'epoch_{epoch + 1}')
 
             print(f'Epoch {epoch+1}, Loss: {train_loss / len(train_loader):.4f}')
+
+        with torch.no_grad():
+            sample_batch = next(iter(test_loader))[0]
+            recon_batch, _, _ = vae(sample_batch)
+            save_image_grid(sample_batch, recon_batch, 'on_test')
+
     torch.save(vae.state_dict(), checkpoint_path)
 
     vae.eval()
@@ -239,12 +259,25 @@ def main():
     k = 5
     num_samples = 20
     samp = unknown_class_instance[0].unsqueeze(0)
+
+    samples_of_unknown = []
+    for d in full_test:
+        if d[1] == unknown:
+            samples_of_unknown.append(d[0].unsqueeze(0))
+            if len(samples_of_unknown) == num_samples:
+                break
+    outs, _, _ = vae(torch.cat(samples_of_unknown, dim=0))
+    torchvision.utils.save_image(outs,
+                                 os.path.join(GENERATED_DIR,
+                                              f'{unknown}_no_dist_estimate.png'),
+                                 nrow=num_samples // 5)
+
     k_closest_classes = vae.k_closest(samp, k)
     for c in k_closest_classes:
         print(f'label: {c[0]} | dist {c[1]}')
     mean, std = vae.latent_distribution(k_closest_classes, samp, 0.5)
     samples = vae.generate_samples(mean, std, num_samples)
-    torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{unknown}.png'),
+    torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{unknown}_from_dist_estimate.png'),
                                  nrow=num_samples // 5)
 
 if __name__ == '__main__':
