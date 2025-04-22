@@ -100,7 +100,7 @@ if __name__ == '__main__':
     ###Good
     model = BackwardPass.BackwardPass(num_classes=num_classes, image_size = 28, T = 1000).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    train(model, train_loader, optimizer, epochs=2)
+    train(model, train_loader, optimizer, epochs=20)
     ###Good
 
     torch.save(model.state_dict(), os.path.join(MODEL_DIR, f'dif_{unknown}.pth'))
