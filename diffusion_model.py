@@ -37,6 +37,8 @@ if __name__ == '__main__':
     alphas_prod = torch.cumprod(alphas, dim=0)
 
     def get_alpha(a, t, x_shape):
+        if a.device != t.device:
+            a = a.to(t.device)
         return a.gather(-1, t).reshape(-1, 1, 1, 1).expand(x_shape)
 
     def forward_process_q(x_0, t, noise=None):
