@@ -20,7 +20,6 @@ betas = torch.linspace(0.0001, 0.02, T)
 alphas = 1 - betas
 alphas_prod = torch.cumprod(alphas, dim=0)
 
-
 @torch.no_grad()
 def cond_samp_CFG(model, shape, class_token=None, constantw_scale=2.0):
     x = torch.randn(shape, device=device)
