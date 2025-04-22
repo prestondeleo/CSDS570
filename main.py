@@ -25,7 +25,15 @@ def main(unknown: int):
     vae.load_state_dict(torch.load(vae_path, weights_only=True, map_location=torch.device('cpu')))
     dif.load_state_dict(torch.load(dif_path, weights_only=True, map_location=torch.device('cpu')))
 
-    k = 9
+    for u in torch.linspace(0, 10, 100):
+        samples = cond_samp_CFG(dif, (5, 1, 28, 28), class_token=u.item(), constantw_scale=20)
+        samples = (samples.clamp(-1, 1) + 1) / 2
+        torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{u.item()}_dif.png'),
+                                     nrow=len(samples) // 5)
+
+    return
+
+    k = 5
     full_train = datasets.MNIST(root=DATASET_DIR, train=True, transform=transforms.Compose([
         transforms.ToTensor()
         ]), download=True)
