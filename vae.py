@@ -161,6 +161,19 @@ class VAE(nn.Module):
 
         return generated
 
+    def generate_close_to_sample(self, sample, num_samples):
+        self.eval()
+        mu, logvar = self.encoder(sample)
+
+        std = torch.exp(0.5 * logvar) * 2
+
+        with torch.no_grad():
+            eps = torch.randn((num_samples,) + std.shape, device=std.device)
+            z = mu.unsqueeze(0) + eps * std.unsqueeze(0)
+            generated = self.decoder(z)
+
+        return generated
+
 
 def vae_loss(recon_x, x, mu, logvar):
     bce = F.binary_cross_entropy(recon_x, x, reduction='sum')
@@ -196,7 +209,7 @@ def main():
         transforms.ToTensor()
     ])
     num_epochs = 10
-    unknown = 1
+    unknown = 8
 
     full_train = datasets.MNIST(root=DATASET_DIR, train=True, transform=transform, download=True)
     indices = [i for i in range(len(full_train)) if full_train[i][1] != unknown]
@@ -240,7 +253,6 @@ def main():
     torch.save(vae.state_dict(), checkpoint_path)
 
     vae.eval()
-    vae.save_distributions(train_loader)
     unknown_class_instance = None
     for d in full_train:
         if d[1] == unknown:
@@ -260,15 +272,20 @@ def main():
     outs, _, _ = vae(torch.cat(samples_of_unknown, dim=0))
     torchvision.utils.save_image(outs,
                                  os.path.join(GENERATED_DIR,
-                                              f'{unknown}_no_dist_estimate.png'),
+                                              f'{unknown}_test.png'),
                                  nrow=num_samples // 5)
 
+    vae.save_distributions(train_loader)
     k_closest_classes = vae.k_closest(samp, k)
     for c in k_closest_classes:
         print(f'label: {c[0]} | dist {c[1]}')
     mean, std = vae.latent_distribution(k_closest_classes, samp, 0.5)
     samples = vae.generate_samples(mean, std, num_samples)
     torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{unknown}_from_dist_estimate.png'),
+                                 nrow=num_samples // 5)
+
+    samples = vae.generate_close_to_sample(samp, num_samples)
+    torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{unknown}_close_to_samp.png'),
                                  nrow=num_samples // 5)
 
 if __name__ == '__main__':
