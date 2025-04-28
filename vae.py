@@ -1,3 +1,4 @@
+import sys
 import torch
 from dirs import *
 import torch.nn as nn
@@ -174,6 +175,13 @@ class VAE(nn.Module):
 
         return generated
 
+    def compute_avg_latent_distance(self, samp, samples):
+        z_true = self.reparameterize(*self.encoder(samp))
+        z_generated = self.reparameterize(*self.encoder(samples))
+        dists = torch.norm(z_generated - z_true, dim=1, p=2)
+
+        return dists.mean()
+
 
 def vae_loss(recon_x, x, mu, logvar):
     bce = F.binary_cross_entropy(recon_x, x, reduction='sum')
@@ -204,12 +212,11 @@ def save_image_grid(original, reconstructed, name):
     plt.savefig(os.path.join(OUTPUT_DIR, f'{name}.png'))
     plt.close()
 
-def main():
+def main(unknown):
     transform = transforms.Compose([
         transforms.ToTensor()
     ])
     num_epochs = 10
-    unknown = 8
 
     full_train = datasets.MNIST(root=DATASET_DIR, train=True, transform=transform, download=True)
     indices = [i for i in range(len(full_train)) if full_train[i][1] != unknown]
@@ -277,16 +284,25 @@ def main():
 
     vae.save_distributions(train_loader)
     k_closest_classes = vae.k_closest(samp, k)
-    for c in k_closest_classes:
-        print(f'label: {c[0]} | dist {c[1]}')
+    with open(os.path.join(GENERATED_DIR, f'{unknown}_closest_classes'), 'w') as f:
+        for c in k_closest_classes:
+            line = f'label: {c[0]} | dist {c[1]}\n'
+            print(line, end='')
+            f.write(line)
     mean, std = vae.latent_distribution(k_closest_classes, samp, 0.5)
     samples = vae.generate_samples(mean, std, num_samples)
     torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{unknown}_from_dist_estimate.png'),
                                  nrow=num_samples // 5)
+    dist = vae.compute_avg_latent_distance(samp, samples)
+    print(f'{unknown} average dist: {dist}')
 
     samples = vae.generate_close_to_sample(samp, num_samples)
     torchvision.utils.save_image(samples, os.path.join(GENERATED_DIR, f'{unknown}_close_to_samp.png'),
                                  nrow=num_samples // 5)
 
 if __name__ == '__main__':
-    main()
+    assert len(sys.argv) <= 2
+    unknown = 8
+    if len(sys.argv) == 2:
+        unknown = int(sys.argv[1])
+    main(unknown)
